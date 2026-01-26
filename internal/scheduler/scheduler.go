@@ -1,21 +1,19 @@
-package internal
+package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/robfig/cron"
+	"github.com/robfig/cron/v3"
 	"github.com/vinaymanala/nationpulse-cron-data-ingestion-schedular-svc/internal/client"
 	"github.com/vinaymanala/nationpulse-cron-data-ingestion-schedular-svc/internal/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var jobLock sync.Mutex
+// var jobLock sync.Mutex
 
 type Scheduler struct {
 	cron   *cron.Cron
@@ -32,13 +30,7 @@ func New(cfg *config.Config) *Scheduler {
 func (s *Scheduler) Start() {
 	log.Println("Initializing cron jobs...")
 
-	err := s.cron.AddFunc(s.config.CronSchedule, func() {
-		if !tryAcquireLock() {
-			log.Println("Already job running. Skipping")
-			return
-		}
-		defer releaseLock()
-
+	entryID, err := s.cron.AddFunc(s.config.CronSchedule, func() {
 		log.Println("Cron job triggered")
 		s.runDataIngestionJob()
 	})
@@ -46,8 +38,9 @@ func (s *Scheduler) Start() {
 	if err != nil {
 		log.Fatalf("Failed to add cron job: %v", err)
 	}
+
 	s.cron.Start()
-	log.Printf("Cron schedular started with schedule: %s", s.config.CronSchedule)
+	log.Printf("Cron schedular started with id: %d, schedule: %s", entryID, s.config.CronSchedule)
 }
 
 func (s *Scheduler) Stop() {
@@ -55,36 +48,10 @@ func (s *Scheduler) Stop() {
 	s.cron.Stop()
 }
 
-func tryAcquireLock() bool {
-	jobLock.Lock()
-	defer jobLock.Unlock()
-
-	// Check if lock file exists
-	lockFile := filepath.Join(os.TempDir(), "cron-job.lock")
-	if _, err := os.Stat(lockFile); err == nil {
-		// Lock file exists - job is already running
-		return false
-	}
-
-	// Create lock file
-	if err := os.WriteFile(lockFile, []byte("locked"), 0644); err != nil {
-		log.Printf("Failed to create lock file: %v", err)
-		return false
-	}
-
-	return true
-}
-
-func releaseLock() {
-	lockFile := filepath.Join(os.TempDir(), "cron-job.lock")
-	os.Remove(lockFile)
-}
-
 func (s *Scheduler) runDataIngestionJob() {
 	ctx := context.Background()
-
-	conn, err := grpc.NewClient(
-		s.config.GRPCServerAddr,
+	fmt.Println("Connecting GRPC client")
+	conn, err := grpc.DialContext(ctx, s.config.GRPCServerAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -95,7 +62,7 @@ func (s *Scheduler) runDataIngestionJob() {
 
 	grpcClient := client.NewGRPCClient(conn)
 
-	jobCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	if err := grpcClient.GetNotify(jobCtx); err != nil {

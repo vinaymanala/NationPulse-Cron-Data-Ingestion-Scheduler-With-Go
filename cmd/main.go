@@ -22,10 +22,12 @@ func main() {
 
 	sch := s.New(cfg)
 	sch.Start()
+	defer sch.Stop()
+	// graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	sch.Stop()
+	//cleanup and shut down services
 	log.Println("Schedular stopped")
 }
